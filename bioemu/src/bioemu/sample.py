@@ -17,6 +17,7 @@ import yaml
 from huggingface_hub import hf_hub_download
 from torch._prims_common import DeviceLikeType
 from torch_geometric.data.batch import Batch
+from torch_geometric.utils import to_dense_batch
 from tqdm import tqdm
 
 from bioemu.chemgraph import ChemGraph
@@ -183,6 +184,21 @@ def generate_chemgraph(
     return chemgraph
 
 
+def batch_to_dense_dict(batch: ChemGraph) -> dict[str, torch.Tensor]:
+    """Convert a ChemGraph batch to a dense dictionary."""
+
+    assert isinstance(batch, Batch)
+
+    pos = batch.pos
+    node_orientations = batch.node_orientations
+    batch_idx = batch.batch
+
+    return {
+        "pos": to_dense_batch(pos, batch_idx)[0],
+        "node_orientations": to_dense_batch(node_orientations, batch_idx)[0],
+    }
+
+
 @clean_gpu_cache
 @torch.no_grad()
 def generate_batch(
@@ -194,7 +210,7 @@ def generate_batch(
     msa_file: str | Path | None = None,
     msa_host_url: str | None = None,
     seed: int | None = None,
-) -> dict[str, torch.Tensor]:
+) -> ChemGraph:
     """Generate one batch of samples, using GPU if available.
 
     Args:
@@ -224,18 +240,12 @@ def generate_batch(
 
     sdes, score_model, denoiser = bundle
 
-    sampled_chemgraph_batch = denoiser(
+    return denoiser(
         batch=batch,
         sdes=sdes,
         score_model=score_model,
         device=device,
     )
-
-    sampled_chemgraphs = sampled_chemgraph_batch.to_data_list()
-    pos = torch.stack([x.pos for x in sampled_chemgraphs]).to("cpu")
-    node_orientations = torch.stack([x.node_orientations for x in sampled_chemgraphs]).to("cpu")
-
-    return {"pos": pos, "node_orientations": node_orientations}
 
 
 def sample(
@@ -305,7 +315,9 @@ def sample(
             msa_host_url=msa_host_url,
             seed=seed,
         )
-        np.savez(npz_path, **{k: v.cpu().numpy() for k, v in batch.items()}, sequence=sequence)
+        dense_dict = batch_to_dense_dict(batch)
+
+        np.savez(npz_path, **{k: v.cpu().numpy() for k, v in dense_dict.items()}, sequence=sequence)
 
     logger.info("Converting samples to .pdb and .xtc...")
     samples_files = sorted(list(output_dir.glob("batch_*.npz")))

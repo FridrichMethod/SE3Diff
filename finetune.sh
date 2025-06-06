@@ -13,7 +13,7 @@ python -m bioemu.finetune \
     --csv_path ./test/megascale/train_sample.csv \
     --csv_path_val ./test/megascale/val_sample.csv \
     --sequence_col aa_seq \
-    --h_stars_cols p_folded \
+    --h_stars_cols ones \
     --output_dir None \
     --finetune_config_path None \
     --model_name bioemu-v1.0 \

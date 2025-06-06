@@ -23,12 +23,15 @@ from torch_geometric.utils import to_dense_batch
 from tqdm.auto import tqdm, trange
 
 from bioemu.chemgraph import ChemGraph
+from bioemu.convert_chemgraph import save_pdb_and_xtc
 from bioemu.denoiser import DenoisedSDEPath, SDEs
+from bioemu.get_embeds import shahexencode
 from bioemu.models import DiGConditionalScoreModel
 from bioemu.ppft import compute_ev_loss, compute_int_dws, compute_int_u_u_dt, compute_kl_loss
 from bioemu.sample import (
     DEFAULT_MODEL_CHECKPOINT_DIR,
     SupportedModelNamesLiteral,
+    batch_to_dense_dict,
     generate_chemgraph,
     maybe_download_checkpoint,
 )
@@ -578,6 +581,21 @@ def finetune(
                         tol=tol,
                     )
 
+                    # Save the sampled structures
+                    batch = denoised_sde_path.batches[-1]
+                    dense_dict = batch_to_dense_dict(batch)
+                    seqsha = shahexencode(sequence)
+                    sequence_dir = output_dir / seqsha
+                    sequence_dir.mkdir(parents=True, exist_ok=True)
+                    save_pdb_and_xtc(
+                        pos_nm=dense_dict["pos"],
+                        node_orientations=dense_dict["node_orientations"],
+                        sequence=sequence,
+                        topology_path=sequence_dir / f"topology_{epoch}.pdb",
+                        xtc_path=sequence_dir / f"samples_{epoch}.xtc",
+                        filter_samples=False,  # Save all samples
+                    )
+
                 optimizer.step()
                 scheduler.step()
 
@@ -586,7 +604,7 @@ def finetune(
                 pbar.set_postfix(loss=f"{l:.2f}")
 
                 avg_loss = epoch_loss / n_batch
-                logger.info(f"Epoch {epoch}: Running average training loss = {avg_loss:.4f}")
+                logger.info(f"Epoch {epoch}: Running average of training loss = {avg_loss:.4f}")
 
         # Validation step
         if epoch % val_every_n_epochs == 0 or epoch == num_epochs:
@@ -628,7 +646,7 @@ def finetune(
 
                     avg_val_loss = epoch_val_loss / n_batch_val
                     logger.info(
-                        f"Epoch {epoch}: Running average validation loss = {avg_val_loss:.4f}"
+                        f"Epoch {epoch}: Running average of validation loss = {avg_val_loss:.4f}"
                     )
 
             if avg_val_loss < best_val_loss:
