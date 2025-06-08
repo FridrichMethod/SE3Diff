@@ -23,6 +23,8 @@ def load_reference_ca_coords(
     """
     Load C-alpha coordinates from a reference PDB file into a torch.Tensor.
 
+    This function assumes **nm** as the default unit.
+
     Args:
         ref_path: Path to the reference PDB file.
         device: torch device for the returned tensor.
@@ -59,6 +61,8 @@ def compute_folded_proportion(
     """
     Compute the expected folded proportion of an ensemble using the f_dRMSD sigmoid metric.
 
+    This function assumes **nm** as the default unit, meaning `d_0` corresponds to 4 Angstroms (0.4 nm).
+
     Args:
         coords: Tensor of shape (B, L, 3), sampled C-alpha coordinates.
         ref_coords: Tensor of shape (L, 3), reference folded C-alpha coordinates.
@@ -93,11 +97,10 @@ def compute_dG(
         tol: Small value to guard against division by zero.
 
     Returns:
-        delta_G: Tensor scalar, folding free energy in kcal/mol.
+        delta_G: Tensor of shape (B,), folding free energy in kcal/mol.
     """
 
     # Guard against boundary values
-    p_folded = p_folded.mean()
     p_folded = torch.clamp(p_folded, min=tol, max=1.0 - tol)
 
     return -K_BOLTZMANN * temperature * torch.log(p_folded / (1.0 - p_folded))
@@ -202,7 +205,7 @@ class FoldingStability:
 
     def __call__(self, batch: ChemGraph, sequence: str) -> torch.Tensor:
         """
-        Compute the ratio of folded vs unfolded free energy between samples and ground truth.
+        Compute the folding stability metric for a batch of ChemGraph samples.
 
         Args:
             batch: ChemGraph batch containing multiple samples with 'pos' coordinates (B, L, 3).
@@ -216,22 +219,9 @@ class FoldingStability:
         coords, _ = to_dense_batch(batch.pos, batch.batch)  # (B, L, 3)
         ref_coords = load_reference_ca_coords(ref_path, device=coords.device)
 
-        dG_star = torch.from_numpy(
-            self.dataset.loc[self.dataset[self.sequence_col] == sequence, self.dG_col].values
-        ).to(device=coords.device, dtype=torch.float32)
-        assert dG_star.shape == (1,)
-
         # Compute the folded proportion
-        p_folded = compute_folded_proportion(coords, ref_coords, self.k, self.d_0, self.tol)  # (B,)
-        p_folded_star = compute_folded_proportion_from_dG(
-            dG_star, temperature=self.temperature
-        )  # (1,)
+        p_folded = compute_folded_proportion(
+            coords, ref_coords, k=self.k, d_0=self.d_0, tol=self.tol
+        )  # (B,)
 
-        # Compute the ratio of folded vs unfolded free energy
-        f_vs_uf = p_folded / (1.0 - p_folded)  # (B,)
-        f_vs_uf_star = p_folded_star / (1.0 - p_folded_star)  # (1,)
-
-        # Compute the ratio
-        ratio = f_vs_uf / f_vs_uf_star  # (B,)
-
-        return ratio.unsqueeze(-1)  # (B, 1)
+        return p_folded.unsqueeze(1)  # Return as (B, 1) tensor for consistency
