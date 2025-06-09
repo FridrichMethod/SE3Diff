@@ -104,9 +104,9 @@ def compute_ev_loss(
     dhs = hs - h_stars  # (B, K)
 
     if use_stab and B > 1:  # Stability correction only makes sense for degree of freedom B > 1
-        pbar = torch.mean(hs, dim=0)
-        stab = torch.sum(pbar, dim=0) / (pbar + tol)  # (K,)
-        stab = stab / torch.mean(stab)  # (K,)
+        pbar = torch.mean(hs, dim=0)  # (K,)
+        stab = torch.sum(pbar, dim=0, keepdim=True) / (pbar + tol)  # (K,)
+        stab = stab / torch.mean(stab, dim=0, keepdim=True)  # (K,)
     else:
         stab = torch.tensor(1.0, device=ws.device)
 

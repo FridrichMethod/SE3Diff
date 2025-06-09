@@ -6,7 +6,7 @@ shuffle: true
 num_workers: 0
 
 # Loss parameters
-lambda_: 5.0e-06
+lambda_: 1.0e-05
 tol: 1.0e-07
 
 # Training parameters

@@ -103,7 +103,7 @@ def compute_dG(
     # Guard against boundary values
     p_folded = torch.clamp(p_folded, min=tol, max=1.0 - tol)
 
-    return -K_BOLTZMANN * temperature * torch.log(p_folded / (1.0 - p_folded))
+    return -K_BOLTZMANN * temperature * torch.logit(p_folded)
 
 
 def compute_folded_proportion_from_dG(dG: torch.Tensor, temperature: float = 298.0) -> torch.Tensor:

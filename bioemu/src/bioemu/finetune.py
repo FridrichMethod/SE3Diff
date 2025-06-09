@@ -406,11 +406,6 @@ def compute_finetune_loss(
 
     fields = list(sdes.keys())  # ["pos", "node_orientations"]
 
-    # Pop the last batch (x_0) to use for computing h
-    hs = h_func(batch=batches[-1], sequence=sequence)  # (B, K)
-    logger.debug(f"Current h_stars: {h_stars}")
-    logger.debug(f"Computed expected value of h function: {hs.mean(dim=0)}")
-
     dts = torch.diff(timesteps)
     num_steps = len(dts)
     if micro_batch_size > num_steps:
@@ -425,6 +420,31 @@ def compute_finetune_loss(
         compute_int_u_u_dt(us=us_batch_sg_flattened[field], dts=dts) for field in fields
     )  # (B,)
     assert isinstance(int_u_u_dt_sg, torch.Tensor)
+
+    # Pop the last batch (x_0) to use for computing h
+    hs = h_func(batch=batches[-1], sequence=sequence)  # (B, K)
+    logger.debug(f"Current h_stars: {h_stars}")
+    logger.debug(f"Computed expected value of h function: {hs.mean(dim=0)}")
+
+    # Return the real loss (not for gradients) used for validation
+    ws = torch.ones_like(int_u_u_dt_sg)  # (B,)
+    loss_ev = compute_ev_loss(
+        ws=ws, hs=hs, h_stars=h_stars, from_int_dws=False, use_stab=False, tol=tol
+    )
+    loss_kl = compute_kl_loss(
+        ws=ws,
+        int_u_u_dt=int_u_u_dt_sg,
+        int_u_u_dt_sg=int_u_u_dt_sg,
+        from_int_dws=False,
+        use_rloo=False,
+    )
+
+    logger.info(f"The expected value loss: {loss_ev.item():.4f}")
+    logger.info(f"The KL divergence loss: {loss_kl.item():.4f}")
+
+    loss = loss_ev + lambda_ * loss_kl
+
+    logger.info(f"Total loss for sequence '{sequence}': {loss.item():.4f}")
 
     if for_grad:
         num_micro_batches = math.ceil(num_steps / micro_batch_size)
@@ -449,26 +469,6 @@ def compute_finetune_loss(
                 lambda_=lambda_,
                 tol=tol,
             )
-
-    # Return the real loss (not for gradients) used for validation
-    ws = torch.ones_like(int_u_u_dt_sg)  # (B,)
-    loss_ev = compute_ev_loss(
-        ws=ws, hs=hs, h_stars=h_stars, from_int_dws=False, use_stab=False, tol=tol
-    )
-    loss_kl = compute_kl_loss(
-        ws=ws,
-        int_u_u_dt=int_u_u_dt_sg,
-        int_u_u_dt_sg=int_u_u_dt_sg,
-        from_int_dws=False,
-        use_rloo=False,
-    )
-
-    logger.info(f"The expected value loss: {loss_ev.item():.4f}")
-    logger.info(f"The KL divergence loss: {loss_kl.item():.4f}")
-
-    loss = loss_ev + lambda_ * loss_kl
-
-    logger.info(f"Total loss for sequence '{sequence}': {loss.item():.4f}")
 
     return loss
 
