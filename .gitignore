@@ -182,3 +182,6 @@ datasets/
 *.pt
 *.pth
 *.ckpt
+*.ppt
+*.pptx
+*.pse
