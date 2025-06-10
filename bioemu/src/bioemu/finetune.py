@@ -89,8 +89,24 @@ class FinetuneBundle(NamedTuple):
     h_func: Callable
 
 
-def initialize_weights_to_near_zero(module: nn.Module, scale: float = 1.0):
-    """Initialize weights of a module to near zero."""
+def _init_xavier(module: nn.Module):
+    """Standard Xavier + zero bias on Linear/Embedding, LayerNorm/BatchNorm defaults."""
+    if isinstance(module, nn.Linear):
+        nn.init.xavier_normal_(module.weight)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    elif isinstance(module, nn.Embedding):
+        nn.init.xavier_normal_(module.weight)
+    elif isinstance(module, nn.LayerNorm):
+        nn.init.ones_(module.weight)
+        nn.init.zeros_(module.bias)
+    elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+        nn.init.ones_(module.weight)
+        nn.init.zeros_(module.bias)
+
+
+def _init_near_zero(module: nn.Module, scale: float = 1e-3):
+    """Re-apply Xavier, then shrink weights by `scale`, zero bias."""
     if isinstance(module, nn.Linear):
         nn.init.xavier_normal_(module.weight)
         with torch.no_grad():
@@ -101,15 +117,24 @@ def initialize_weights_to_near_zero(module: nn.Module, scale: float = 1.0):
         nn.init.xavier_normal_(module.weight)
         with torch.no_grad():
             module.weight.mul_(scale)
-    elif isinstance(module, nn.LayerNorm):
-        nn.init.ones_(module.weight)
-        nn.init.zeros_(module.bias)
-    elif isinstance(module, nn.BatchNorm1d) or isinstance(module, nn.BatchNorm2d):
-        nn.init.ones_(module.weight)
-        nn.init.zeros_(module.bias)
-    else:
-        if hasattr(module, "bias") and isinstance(module.bias, torch.Tensor):
-            nn.init.zeros_(module.bias)
+
+
+def init_finetune_model(model: DiGConditionalScoreModel, scale: float = 1.0) -> None:
+    """Initialize the finetune model with Xavier initialization and near-zero final layers.
+
+    Args:
+        model: The DiGConditionalScoreModel to initialize.
+    """
+
+    model.apply(_init_xavier)
+
+    # Re-initialize the last layer to be near zero
+    final_t = model.model_nn.st_module.diff_head.fc_t[-1]
+    final_eps = model.model_nn.st_module.diff_head.fc_eps[-1]
+
+    # re-initialize them to be O(scale)
+    _init_near_zero(final_t, scale=scale)
+    _init_near_zero(final_eps, scale=scale)
 
 
 def load_finetune_bundle(
@@ -150,7 +175,9 @@ def load_finetune_bundle(
     finetune_model: DiGConditionalScoreModel = hydra.utils.instantiate(
         model_config["finetune_model"]
     )
-    finetune_model.apply(initialize_weights_to_near_zero)
+
+    # Initialize the finetune model
+    init_finetune_model(finetune_model)
     if finetune_ckpt_path is not None:
         logger.info(f"Loading finetune model from {finetune_ckpt_path}.")
         finetune_model.load_state_dict(
