@@ -9,6 +9,7 @@ from bioemu.ppft import (
     compute_int_dws,
     compute_int_u_u_dt,
     compute_kl_loss,
+    compute_ws,
 )
 from bioemu.so3_sde import SO3SDE, angle_from_rotmat, igso3_expansion
 from se3diff.train import _get_so3_score
@@ -132,6 +133,7 @@ def compute_finetune_loss(
     int_u_u_dt = compute_int_u_u_dt(us=us, dts=dts)  # (B,)
     int_u_u_dt_sg = compute_int_u_u_dt(us=us_sg, dts=dts)  # (B,)
     int_dws = compute_int_dws(us=us, dWs=dWs)  # (B,)
+    # ws = compute_ws(us=us, dWs=dWs, dts=dts)  # (B,)
 
     loss_ev = compute_ev_loss(ws=int_dws, hs=hs, h_stars=h_stars, tol=tol)
     loss_kl = compute_kl_loss(

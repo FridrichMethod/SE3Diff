@@ -751,6 +751,22 @@ Minimum time (\texttt{min\_t}) & 0.001 \\
 
 \begin{table}[!ht]
 \centering
+\caption{Hyperparameters for folding stability estimation}
+\label{tab:folding_stability_hyperparameters}
+\begin{tabular}{ll}
+\toprule
+Parameter (key) & Value \\
+\midrule
+Temperature (K) (\texttt{temperature}) & 298.0 \\
+Scaling constant $k$ (\texttt{k}) & -24.0 \\
+Distance cutoff $d_{0}$ (nm) (\texttt{d\_0}) & 0.4 \\
+Convergence tolerance (\texttt{tol}) & $1\times10^{-7}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!ht]
+\centering
 \caption{Hyperparameters for fine-tuning BioEmu (default)}
 \label{tab:finetune_hyperparameters}
 \begin{tabular}{ll}
@@ -771,22 +787,6 @@ Learning rate (\texttt{lr}) & 5.0$\times10^{-4}$ \\
 Adam betas (\texttt{betas}) & (0.9, 0.999) \\
 Weight decay (\texttt{weight\_decay}) & 0.0 \\
 Minimum learning rate (\texttt{eta\_min}) & $1\times10^{-5}$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{table}[!ht]
-\centering
-\caption{Hyperparameters for folding stability estimation}
-\label{tab:folding_stability_hyperparameters}
-\begin{tabular}{ll}
-\toprule
-Parameter (key) & Value \\
-\midrule
-Temperature (K) (\texttt{temperature}) & 298.0 \\
-Scaling constant $k$ (\texttt{k}) & -24.0 \\
-Distance cutoff $d_{0}$ (nm) (\texttt{d\_0}) & 0.4 \\
-Convergence tolerance (\texttt{tol}) & $1\times10^{-7}$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -863,11 +863,11 @@ Number of layers (\texttt{num\_layers}) & 4 \\
 
 \begin{table}[!ht]
 \centering
-\caption{Folded proportion and experimental stability ($\Delta G_{\mathrm{exp}}$) of the 5 sequences for fine-tuning}
+\caption{Folded proportion and experimental stability of the 5 sequences for fine-tuning}
 \label{tab:protein_summary}
 \begin{tabular}{clcccc}
 \toprule
-Sequence ID & PDB name & $p_{\textrm{folded}}$ & $\Delta G_{\textrm{exp}}$ (kcal/mol) & CI$_{95,\textrm{low}}$ & CI$_{95,\textrm{high}}$ \\
+Sequence ID & PDB name & $p_{\text{folded}}$ & $\Delta G_{\text{exp}}$ (kcal/mol) & CI$_{95,\text{low}}$ & CI$_{95,\text{high}}$ \\
 \midrule
 Seq 1 & \texttt{XX|run10\_1081\_0004.pdb\_K15I} & 0.998 & -3.726 & -3.803 & -3.653 \\
 Seq 2 & \texttt{r4\_412\_TrROS\_Hall.pdb\_N12S} & 0.992 & -2.866 & -2.992 & -2.784\\
