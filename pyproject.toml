@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "se3diff"
+authors = [{ name = "Zhaoyang Li", email = "zhaoyangli@stanford.edu" }]
+license = { file = "LICENSE" }
+dynamic = ["version"]
+description = "Fine-tuning $\\mathrm{SE}(3)$ diffusion models for protein ensemble generation."
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Required dependencies
+dependencies = [
+    "torch>=2.7.1",
+    "jax[cuda12]==0.5.3",
+    "alphafold-colabfold",
+    "colabfold",
+    "matplotlib",
+    "seaborn",
+    "jupyter",
+    "transformers",
+    "datasets",
+    # "git+https://github.com/FridrichMethod/bioemu.git",
+    # "git+https://github.com/FridrichMethod/bioemu-benchmarks.git",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "pre-commit"]
+
+[tool.pytest.ini_options]
+addopts = "-v -s"
+testpaths = ["tests"]
+
+[tool.setuptools.dynamic]
+version = { attr = "se3diff.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["se3diff", "se3diff.*"]

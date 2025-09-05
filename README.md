@@ -1,2 +1,3 @@
 # SE3Diff
-SE3 diffusion models
+
+Fine-tuning $\mathrm{SE}(3)$ diffusion models for protein ensemble generation.

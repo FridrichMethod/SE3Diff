@@ -176,6 +176,7 @@ cython_debug/
 # folders
 test/
 datasets/
+notebooks/
 
 # files
 *.pt
