@@ -16,7 +16,7 @@ python -m bioemu.finetune \
     --h_stars_cols p_folded \
     --output_dir None \
     --finetune_config_path None \
-    --model_name bioemu-v1.0 \
+    --model_name bioemu-v1.1 \
     --ckpt_path None \
     --finetune_ckpt_path None \
     --model_config_path None \

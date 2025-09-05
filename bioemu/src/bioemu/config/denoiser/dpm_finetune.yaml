@@ -1,0 +1,6 @@
+_target_: bioemu.shortcuts.dpm_solver_finetune
+_partial_: true
+num_steps: 50
+max_t: 0.99
+min_t: 0.001
+noise: 0.0

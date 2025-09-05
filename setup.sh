@@ -18,17 +18,17 @@ export BIOEMU_COLABFOLD_DIR=$CONDA_PREFIX
 # Create a conda environment for BioEMu
 # conda create -n se3diff python=3.12 --yes
 # conda activate se3diff
-conda install -c conda-forge jupyter --yes
 
 pip install uv
 
 # Install required packages with correct versions
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+uv pip install torch
 uv pip install jax[cuda12]==0.5.3
 uv pip install alphafold-colabfold colabfold
 uv pip install dm-haiku --upgrade
 uv pip install numpy==1.26.4
 uv pip install seaborn
+uv pip install jupyter
 
 # Patch ColabFold
 SITE_PACKAGES_DIR=$(python -c "import site; print(next(p for p in site.getsitepackages() if 'site-packages' in p))")
@@ -38,21 +38,21 @@ patch "${SITE_PACKAGES_DIR}/colabfold/batch.py" "${SCRIPT_DIR}/batch.patch"
 touch "${CONDA_PREFIX}"/.COLABFOLD_PATCHED
 
 # Install BioEmu and BioEmu Benchmarks
-cd bioemu && uv pip install -e . && cd ..
-cd bioemu-benchmarks && uv pip install -e . && cd ..
+uv pip install -e bioemu
+uv pip install -e bioemu-benchmarks
 
 # Test BioEmu
-python -m bioemu.sample \
-    --sequence GYDPETGTWG \
-    --num_samples 10 \
-    --output_dir ./test/chignolin \
-    --batch_size_100 100 \
-    --model_name bioemu-v1.0 \
-    --ckpt_path None \
-    --model_config_path None \
-    --denoiser_type dpm \
-    --denoiser_config_path None \
-    --cache_embeds_dir ~/.cache/bioemu/embeds \
-    --cache_so3_dir ~/.cache/bioemu/so3 \
-    --msa_host_url None \
-    --filter_samples True
+# python -m bioemu.sample \
+#     --sequence GYDPETGTWG \
+#     --num_samples 10 \
+#     --output_dir ./test/chignolin \
+#     --batch_size_100 100 \
+#     --model_name bioemu-v1.1 \
+#     --ckpt_path None \
+#     --model_config_path None \
+#     --denoiser_type dpm \
+#     --denoiser_config_path None \
+#     --cache_embeds_dir ~/.cache/bioemu/embeds \
+#     --cache_so3_dir ~/.cache/bioemu/so3 \
+#     --msa_host_url None \
+#     --filter_samples True

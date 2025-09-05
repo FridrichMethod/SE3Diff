@@ -103,7 +103,7 @@ def compute_ev_loss(
     ws_ = ws.unsqueeze(1)  # (B, 1)
     dhs = hs - h_stars  # (B, K)
 
-    if use_stab and B > 1:  # Stability correction only makes sense for degree of freedom B > 1
+    if use_stab and B > 1:  # stability correction only makes sense for degree of freedom B > 1
         pbar = torch.mean(hs, dim=0)  # (K,)
         stab = torch.sum(pbar, dim=0, keepdim=True) / (pbar + tol)  # (K,)
         stab = stab / torch.mean(stab, dim=0, keepdim=True)  # (K,)

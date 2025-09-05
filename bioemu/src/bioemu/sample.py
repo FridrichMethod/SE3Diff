@@ -14,7 +14,8 @@ import hydra
 import numpy as np
 import torch
 import yaml
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfFileSystem, hf_hub_download
+from requests.exceptions import HTTPError
 from torch._prims_common import DeviceLikeType
 from torch_geometric.data.batch import Batch
 from torch_geometric.utils import to_dense_batch
@@ -24,6 +25,7 @@ from bioemu.chemgraph import ChemGraph
 from bioemu.convert_chemgraph import save_pdb_and_xtc
 from bioemu.denoiser import SDEs
 from bioemu.get_embeds import get_colabfold_embeds
+from bioemu.model_utils import load_model, load_sdes
 from bioemu.models import DiGConditionalScoreModel
 from bioemu.seq_io import check_protein_valid, parse_sequence, write_fasta
 from bioemu.utils import (
@@ -42,7 +44,7 @@ SUPPORTED_DENOISERS = list(typing.get_args(SupportedDenoisersLiteral))
 
 # Model checkpoint directory
 DEFAULT_MODEL_CHECKPOINT_DIR = Path(__file__).parent / "checkpoints"
-SupportedModelNamesLiteral = Literal["bioemu-v1.0", "bioemu-rev"]
+SupportedModelNamesLiteral = Literal["bioemu-v1.0", "bioemu-v1.1"]
 SUPPORTED_MODEL_NAMES = list(typing.get_args(SupportedModelNamesLiteral))
 
 
@@ -80,15 +82,28 @@ def maybe_download_checkpoint(
         return str(ckpt_path), str(model_config_path)
 
     ckpt_path_default = DEFAULT_MODEL_CHECKPOINT_DIR / model_name / "checkpoint.ckpt"
-    ckpt_path_download = hf_hub_download(
-        repo_id="microsoft/bioemu",
-        filename=f"checkpoints/{model_name}/checkpoint.ckpt",
-    )
     model_config_path_default = DEFAULT_MODEL_CHECKPOINT_DIR / model_name / "config.yaml"
-    model_config_path_download = hf_hub_download(
-        repo_id="microsoft/bioemu",
-        filename=f"checkpoints/{model_name}/config.yaml",
-    )
+    try:
+        ckpt_path_download = hf_hub_download(
+            repo_id="microsoft/bioemu",
+            filename=f"checkpoints/{model_name}/checkpoint.ckpt",
+        )
+        model_config_path_download = hf_hub_download(
+            repo_id="microsoft/bioemu",
+            filename=f"checkpoints/{model_name}/config.yaml",
+        )
+    except HTTPError as e:
+        fs = HfFileSystem()
+        available_checkpoints = [
+            Path(p).parent.name for p in fs.glob("microsoft/bioemu/checkpoints/*/checkpoint.ckpt")
+        ]
+        available_configs = [
+            Path(p).parent.name for p in fs.glob("microsoft/bioemu/checkpoints/*/config.yaml")
+        ]
+        available_model_names = sorted(set(available_checkpoints).intersection(available_configs))
+        raise ValueError(
+            f"Model {model_name} not found. Available model names: " f"{available_model_names}"
+        ) from e
 
     ckpt_path = Path(ckpt_path_default) if ckpt_path is None else Path(ckpt_path)
     if not ckpt_path.is_file():
@@ -107,7 +122,7 @@ def maybe_download_checkpoint(
 
 
 def load_bundle(
-    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.0",
+    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.1",
     ckpt_path: str | Path | None = None,
     model_config_path: str | Path | None = None,
     denoiser_type: SupportedDenoisersLiteral | None = "dpm",
@@ -118,16 +133,8 @@ def load_bundle(
         model_name=model_name, ckpt_path=ckpt_path, model_config_path=model_config_path
     )
 
-    with open(model_config_path) as f:
-        model_config = yaml.safe_load(f)
-
-    if cache_so3_dir is not None:
-        model_config["sdes"]["node_orientations"]["cache_dir"] = cache_so3_dir
-
-    model_state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    score_model: DiGConditionalScoreModel = hydra.utils.instantiate(model_config["score_model"])
-    score_model.load_state_dict(model_state)
-    sdes: SDEs = hydra.utils.instantiate(model_config["sdes"])
+    score_model: DiGConditionalScoreModel = load_model(ckpt_path, model_config_path)
+    sdes: SDEs = load_sdes(model_config_path, cache_so3_dir)  # type: ignore
 
     if denoiser_config_path is None:
         if denoiser_type not in SUPPORTED_DENOISERS:
@@ -141,7 +148,7 @@ def load_bundle(
     return Bundle(sdes=sdes, score_model=score_model, denoiser=denoiser)
 
 
-def generate_chemgraph(
+def get_context_chemgraph(
     *,
     sequence: str,
     cache_embeds_dir: str | Path | None = None,
@@ -156,11 +163,13 @@ def generate_chemgraph(
         msa_file=msa_file,
         msa_host_url=msa_host_url,
     )
-    single_embeds = np.load(single_embeds_file)
-    pair_embeds = np.load(pair_embeds_file)
-    _, _, n_pair_feats = pair_embeds.shape  # [seq_len, seq_len, n_pair_feats]
+    single_embeds = torch.from_numpy(np.load(single_embeds_file))
+    pair_embeds = torch.from_numpy(np.load(pair_embeds_file))
+    assert pair_embeds.shape[0] == pair_embeds.shape[1] == seq_len
+    assert single_embeds.shape[0] == seq_len
+    assert len(single_embeds.shape) == 2
+    n_pair_feats = pair_embeds.shape[-1]  # [seq_len, seq_len, n_pair_feats]
 
-    single_embeds, pair_embeds = torch.from_numpy(single_embeds), torch.from_numpy(pair_embeds)
     pair_embeds = pair_embeds.view(seq_len**2, n_pair_feats)
 
     edge_index = torch.cat(
@@ -179,24 +188,10 @@ def generate_chemgraph(
         edge_index=edge_index,
         single_embeds=single_embeds,
         pair_embeds=pair_embeds,
+        sequence=sequence,
     )
 
     return chemgraph
-
-
-def batch_to_dense_dict(batch: ChemGraph) -> dict[str, torch.Tensor]:
-    """Convert a ChemGraph batch to a dense dictionary."""
-
-    assert isinstance(batch, Batch)
-
-    pos = batch.pos
-    node_orientations = batch.node_orientations
-    batch_idx = batch.batch
-
-    return {
-        "pos": to_dense_batch(pos, batch_idx)[0],
-        "node_orientations": to_dense_batch(node_orientations, batch_idx)[0],
-    }
 
 
 @clean_gpu_cache
@@ -215,12 +210,9 @@ def generate_batch(
 
     Args:
         sequence: Amino acid sequence.
-        sdes: SDEs defining corruption process. Keys should be 'node_orientations' and 'pos'.
-        score_model: Score model.
-        finetune_model: Finetune model.
-        denoiser: Denoiser function.
+        bundle: Bundle of SDEs, score model, and denoiser.
         batch_size: Batch size.
-        device: Device to use for sampling. If not set, this defaults to the current device.
+        device: Device to use for sampling.
         cache_embeds_dir: Directory to store MSA embeddings. If not set, this defaults to `COLABFOLD_DIR/embeds_cache`.
         msa_file: Optional path to an MSA A3M file.
         msa_host_url: MSA server URL for colabfold.
@@ -230,7 +222,7 @@ def generate_batch(
     if seed is not None:
         torch.manual_seed(seed)
 
-    chemgraph = generate_chemgraph(
+    chemgraph = get_context_chemgraph(
         sequence=sequence,
         cache_embeds_dir=cache_embeds_dir,
         msa_file=msa_file,
@@ -246,6 +238,21 @@ def generate_batch(
         score_model=score_model,
         device=device,
     )
+
+
+def batch_to_dense_dict(batch: ChemGraph) -> dict[str, torch.Tensor]:
+    """Convert a ChemGraph batch to a dense dictionary."""
+
+    assert isinstance(batch, Batch)
+
+    pos = batch.pos
+    node_orientations = batch.node_orientations
+    batch_idx = batch.batch
+
+    return {
+        "pos": to_dense_batch(pos, batch_idx)[0],
+        "node_orientations": to_dense_batch(node_orientations, batch_idx)[0],
+    }
 
 
 def sample(
@@ -345,7 +352,7 @@ def main(
     num_samples: int,
     output_dir: str | Path,
     batch_size_100: int = 10,
-    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.0",
+    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.1",
     ckpt_path: str | Path | None = None,
     model_config_path: str | Path | None = None,
     denoiser_type: SupportedDenoisersLiteral | None = "dpm",
@@ -365,8 +372,10 @@ def main(
         output_dir: Directory to save the samples. Each batch of samples will initially be dumped as .npz files. Once all batches are sampled, they will be converted to .xtc and .pdb.
         batch_size_100: Batch size you'd use for a sequence of length 100. The batch size will be calculated from this, assuming
            that the memory requirement to compute each sample scales quadratically with the sequence length.
-        model_name: Name of pretrained model to use. The model will be retrieved from huggingface. If not set,
-           this defaults to `bioemu-v1.0`. If this is set, you do not need to provide `ckpt_path` or `model_config_path`.
+        model_name: Name of pretrained model to use. If this is set, you do not need to provide `ckpt_path` or `model_config_path`.
+            The model will be retrieved from huggingface; the following models are currently available:
+            - bioemu-v1.0: checkpoint used in the original preprint (https://www.biorxiv.org/content/10.1101/2024.12.05.626885v2)
+            - bioemu-v1.1: checkpoint with improved protein stability performance
         ckpt_path: Path to the model checkpoint. If this is set, `model_name` will be ignored.
         model_config_path: Path to the model config, defining score model architecture and the corruption process the model was trained with.
            Only required if `ckpt_path` is set.

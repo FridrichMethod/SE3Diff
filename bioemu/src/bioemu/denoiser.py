@@ -434,7 +434,7 @@ def heun_denoiser(
                 dt=(t_next - t_hat)[0],
                 drift=drift_hat[field],
                 diffusion=0.0,  # type: ignore
-            )[1]
+            )[0]
 
         # Apply 2nd order correction.
         if t_next[0] > 0.0:
@@ -456,7 +456,7 @@ def heun_denoiser(
                     dt=(t_next - t_hat)[0],
                     drift=avg_drift[field],
                     diffusion=0.0,  # type: ignore
-                )[1]
+                )[0]
 
     return batch
 
@@ -566,7 +566,7 @@ def heun_denoiser_finetune(
                 dt=(t_next - t_hat)[0],
                 drift=drift_hat[field],
                 diffusion=0.0,  # type: ignore
-            )[1]
+            )[0]
 
         # Apply 2nd order correction.
         if t_next[0] > 0.0:
@@ -590,7 +590,7 @@ def heun_denoiser_finetune(
                     dt=(t_next - t_hat)[0],
                     drift=avg_drift[field],
                     diffusion=0.0,  # type: ignore
-                )[1]
+                )[0]
 
         # Store the batch for the current timestep.
         batches.append(batch)
@@ -639,6 +639,8 @@ def dpm_solver(
     num_steps: int,
     max_t: float,
     min_t: float,
+    record_grad_steps: set[int] = set(),
+    noise: float = 0.0,
     device: DeviceLikeType | None = None,
 ) -> ChemGraph:
     """
@@ -646,13 +648,14 @@ def dpm_solver(
     Following this paper: https://arxiv.org/abs/2206.00927 Algorithm 1 DPM-Solver-2.
     DPM solver is used only for positions, not node orientations.
     """
+    grad_is_enabled = torch.is_grad_enabled()
     assert max_t < 1.0
 
     batch = batch.to(device)  # type: ignore
     if isinstance(score_model, nn.Module):
         # permits unit-testing with dummy model
         score_model = score_model.to(device)
-    pos_sde = sdes["pos"]
+    pos_sde = sdes["pos"]  # not nn.Module
     so3_sde = sdes["node_orientations"].to(device)
 
     batch = batch.replace(
@@ -660,8 +663,19 @@ def dpm_solver(
         node_orientations=so3_sde.prior_sampling(batch.node_orientations.shape, device=device),
     )
 
+    ts_min = 0.0
+    ts_max = 1.0
     timesteps = torch.linspace(max_t, min_t, num_steps + 1, device=device)
     dts = torch.diff(timesteps)
+    fields = list(sdes.keys())  # ["pos", "node_orientations"]
+    noisers = {
+        name: EulerMaruyamaPredictor(
+            corruption=cast(SDE, sde),
+            noise_weight=1.0,
+            marginal_concentration_factor=1.0,
+        )
+        for name, sde in sdes.items()
+    }
 
     batch_idx = batch.batch
 
@@ -670,18 +684,28 @@ def dpm_solver(
         t = torch.full((batch.num_graphs,), timestep, device=device)
         t_next = t + dts[i]
 
+        t_hat = t - noise * dts[i] if (i > 0 and ts_min < t[0] < ts_max) else t
+
+        # Apply noise.
+        vals_hat = {}
+        for field in fields:
+            vals_hat[field] = noisers[field].forward_sde_step(
+                x=batch[field], t=t, dt=(t_hat - t)[0], batch_idx=batch_idx
+            )[0]
+        batch_hat = batch.replace(**vals_hat)
         # Evaluate score
-        score = _get_score(batch=batch, sdes=sdes, score_model=score_model, t=t)
+        with torch.set_grad_enabled(grad_is_enabled and (i in record_grad_steps)):
+            score_hat = _get_score(batch=batch_hat, sdes=sdes, score_model=score_model, t=t_hat)
 
         # t_{i-1} in the algorithm is the current t
-        alpha_t, sigma_t = pos_sde.mean_coeff_and_std(x=batch.pos, t=t, batch_idx=batch_idx)
+        alpha_t, sigma_t = pos_sde.mean_coeff_and_std(x=batch.pos, t=t_hat, batch_idx=batch_idx)
         lambda_t = torch.log(alpha_t / sigma_t)
         alpha_t_next, sigma_t_next = pos_sde.mean_coeff_and_std(
             x=batch.pos, t=t_next, batch_idx=batch_idx
         )
         lambda_t_next = torch.log(alpha_t_next / sigma_t_next)
 
-        # t_next < t, lambda_t_next > lambda_t
+        # t_next < t_hat, lambda_t_next > lambda_t
         h_t = lambda_t_next - lambda_t
 
         # For a given noise schedule (cosine is what we use), compute the intermediate t_lambda
@@ -697,8 +721,8 @@ def dpm_solver(
         # Note in the paper the algorithm uses noise instead of score, but we use score.
         # So the formulation is slightly different in the prefactor.
         u = (
-            alpha_t_lambda / alpha_t * batch.pos
-            + sigma_t_lambda * sigma_t * (torch.exp(h_t / 2) - 1) * score["pos"]
+            alpha_t_lambda / alpha_t * batch_hat.pos
+            + sigma_t_lambda * sigma_t * (torch.exp(h_t / 2) - 1) * score_hat["pos"]
         )
 
         # Update positions to the intermediate timestep t_lambda
@@ -707,43 +731,49 @@ def dpm_solver(
         # Get node orientation at t_lambda
 
         # Denoise from t to t_lambda
+        assert score_hat["node_orientations"].shape == (u.shape[0], 3)
+        assert batch.node_orientations.shape == (u.shape[0], 3, 3)
         so3_predictor = EulerMaruyamaPredictor(
             corruption=so3_sde, noise_weight=0.0, marginal_concentration_factor=1.0
         )
-        drift, _ = so3_predictor.reverse_drift_and_diffusion(
-            x=batch.node_orientations,
-            t=t,
-            score=score["node_orientations"],
+        drift_hat, _ = so3_predictor.reverse_drift_and_diffusion(
+            x=batch_hat.node_orientations,
+            t=t_hat,
+            score=score_hat["node_orientations"],
             batch_idx=batch_idx,
         )
         sample = so3_predictor.update_given_drift_and_diffusion(
-            x=batch.node_orientations,
-            dt=(t_lambda - t)[0],
-            drift=drift,
+            x=batch_hat.node_orientations,
+            dt=(t_lambda - t_hat)[0],
+            drift=drift_hat,
             diffusion=0.0,  # type: ignore
         )[
-            1
+            0
         ]  # dt is negative, diffusion is 0
+        assert sample.shape == (u.shape[0], 3, 3)
         batch_u = batch_u.replace(node_orientations=sample)
 
         # Correction step
         # Evaluate score at updated pos and node orientations
-        score_u = _get_score(batch=batch_u, sdes=sdes, score_model=score_model, t=t_lambda)
+        with torch.set_grad_enabled(grad_is_enabled and (i in record_grad_steps)):
+            score_u = _get_score(batch=batch_u, sdes=sdes, score_model=score_model, t=t_lambda)
 
         pos_next = (
-            alpha_t_next / alpha_t * batch.pos
+            alpha_t_next / alpha_t * batch_hat.pos
             + sigma_t_next * sigma_t_lambda * (torch.exp(h_t) - 1) * score_u["pos"]
         )
 
         batch_next = batch.replace(pos=pos_next)
 
+        assert score_u["node_orientations"].shape == (u.shape[0], 3)
+
         # Try a 2nd order correction
         node_score = (
             score_u["node_orientations"]
             + 0.5
-            * (score_u["node_orientations"] - score["node_orientations"])
-            / (t_lambda - t)[0]
-            * dts[i]
+            * (score_u["node_orientations"] - score_hat["node_orientations"])
+            / (t_lambda - t_hat)[0]
+            * (t_next - t_hat)[0]
         )
         drift, _ = so3_predictor.reverse_drift_and_diffusion(
             x=batch_u.node_orientations,
@@ -752,19 +782,19 @@ def dpm_solver(
             batch_idx=batch_idx,
         )
         sample = so3_predictor.update_given_drift_and_diffusion(
-            x=batch.node_orientations,
-            dt=dts[i],
+            x=batch_hat.node_orientations,
+            dt=(t_next - t_hat)[0],
             drift=drift,
             diffusion=0.0,  # type: ignore
         )[
-            1
+            0
         ]  # dt is negative, diffusion is 0
         batch = batch_next.replace(node_orientations=sample)
 
     return batch
 
 
-def sde_dpm_solver_finetune(
+def dpm_solver_finetune(
     *,
     batch: ChemGraph,
     sdes: SDEs,
@@ -773,5 +803,7 @@ def sde_dpm_solver_finetune(
     num_steps: int,
     max_t: float,
     min_t: float,
+    record_grad_steps: set[int] = set(),
+    noise: float = 0.0,
     device: DeviceLikeType | None = None,
 ) -> DenoisedSDEPath: ...

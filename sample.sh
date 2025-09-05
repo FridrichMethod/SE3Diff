@@ -14,7 +14,7 @@ python -m bioemu.sample \
     --num_samples 100 \
     --output_dir ./test/1msj \
     --batch_size_100 100 \
-    --model_name bioemu-v1.0 \
+    --model_name bioemu-v1.1 \
     --ckpt_path None \
     --model_config_path None \
     --denoiser_type dpm \

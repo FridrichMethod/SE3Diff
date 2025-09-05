@@ -2,40 +2,29 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import KernelDensity
-
 from bioemu_benchmarks.logger import get_logger
+from sklearn.neighbors import KernelDensity
 
 LOGGER = get_logger(__name__)
 
 K_BOLTZMANN = 0.001987203599772605  # Boltzmann constant in kcal / mol / K
 
 
-def _compute_dG(sampled_fnc: np.ndarray, threshold: float, temperature: float) -> float:
+def _foldedness_from_fnc(
+    fnc: np.ndarray, p_fold_thr: float, steepness: float
+) -> np.ndarray:
     """
-    Compute the folding free energy from the fraction native contacts (FNC) and a threshold value.
+    Compute foldedness from fraction of native contacts (FNC).
 
     Args:
-        sampled_fnc: Array containing the fraction of native contact scores.
-        threshold: Threshold used to determine folded / unfolded states.
-        temperature: Temperature used for computing folding free energy in Kelvin.
+        fnc: Fraction of native contacts.
+        p_fold_thr: FNC that has foldedness 0.5.
+        steepness: Steepness of the sigmoid function.
 
     Returns:
-        Folding free energy in kcal/mol.
+        Foldedness values.
     """
-
-    n_fold = np.sum(sampled_fnc >= threshold)
-    n_unfold = np.sum(sampled_fnc < threshold)
-
-    if n_fold == 0:
-        ratio = 1e-10
-    elif n_unfold == 0:
-        ratio = 1e10
-    else:
-        ratio = n_fold / n_unfold
-
-    dG = -np.log(ratio) * K_BOLTZMANN * temperature
-    return dG
+    return 1 / (1 + np.exp(-2 * steepness * (fnc - p_fold_thr)))
 
 
 def _compute_threshold(
@@ -70,16 +59,18 @@ def _compute_threshold(
 
     min_data = min(fnc)
     max_data = max(fnc)
-    range = max_data - min_data
+    data_range = max_data - min_data
     # Compute Kernel Density
-    kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth * range).fit(fnc.reshape(-1, 1))
+    kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth * data_range).fit(
+        fnc.reshape(-1, 1)
+    )
     kde_score: np.ndarray = kde.score_samples(fnc_hist[1].reshape(-1, 1))
 
-    max_thr = int(min(max_data * 100 - (margin_ratio_high) * range * 100, max_abs_thr))
-    min_thr = int(max(min_data * 100 + (margin_ratio_low) * range * 100, min_abs_thr))
+    max_thr = int(min(max_data * 100 - (margin_ratio_high) * data_range * 100, max_abs_thr))
+    min_thr = int(max(min_data * 100 + (margin_ratio_low) * data_range * 100, min_abs_thr))
 
     if min_thr >= max_thr:
-        LOGGER.info("Warning: min_thr >= max_thr", min_thr, max_thr)
+        LOGGER.info("Warning: min_thr (%d) >= max_thr (%d)", min_thr, max_thr)
         if min_thr == min_abs_thr:
             return 1
         elif max_thr == max_abs_thr:
@@ -93,12 +84,29 @@ def _compute_threshold(
     return threshold
 
 
+def _compute_dG(
+    fnc: np.ndarray, temperature: float, p_fold_thr: float, steepness: float
+) -> float:
+    """Compute dG from sigmoid of fraction of native contacts"""
+    p_fold_from_stat = _foldedness_from_fnc(
+        fnc, p_fold_thr=p_fold_thr, steepness=steepness
+    ).mean()
+    p_fold_from_stat = np.clip(p_fold_from_stat, 1e-10, 1 - 1e-10)
+
+    ratio = p_fold_from_stat / (1 - p_fold_from_stat)
+    ratio = np.clip(ratio, 1e-10, 1e10)
+
+    dG = -np.log(ratio) * K_BOLTZMANN * temperature  # default temperature 295 K
+    return dG
+
+
 def compute_dg_ddg_from_fnc(
     *,
     dict_fnc: dict[str, np.ndarray],
     system_info: pd.DataFrame,
-    fixed_threshold: float | None = None,
     temperature: float = 295.0,
+    p_fold_thr: float = 0.5,
+    steepness: float = 10.0,
 ) -> pd.DataFrame:
     """
     Compute dG and ddG for a collection of systems based on their native contact scores.
@@ -107,36 +115,26 @@ def compute_dg_ddg_from_fnc(
         dict_fnc: Dictionary with arrays containing fraction of native contact values for the
           different systems as entries and test case IDs as keys.
         system_info: Data frame containing benchmark information.
-        fixed_threshold: Optional fixed threshold for folded / unfolded state determination. If
-          none is given, threshold is determined automatically.
-        temperature: Temperature used for free energy computation in Kelvin.
-
+        temperature: Temperature used for free energy computation in Kelvin. Default: 295 K.
+        p_fold_thr: Threshold for foldedness, i.e., FNC value that corresponds to foldedness 0.5,
+            used as an offset in the sigmoid function. Default: 0.5.
+        steepness: Steepness of the sigmoid function used to compute foldedness from FNC values.
+            Default: 10.0.
     Returns:
         Data frame containing computed dG and ddGs, as well as experimental reference values and
         uncertainties.
     """
     free_energy_results: dict[str, dict[str, Any]] = {}
 
-    # Compute new thresholds and corresponding dG from generated samples.
+    # Compute corresponding dG from generated samples.
     for test_case in dict_fnc:
         # Load fraction of native contacts.
         fnc = dict_fnc[test_case]
-
-        # Determine foldedness threshold if none is provided.
-        if fixed_threshold is None:
-            threshold = _compute_threshold(fnc)
-        else:
-            threshold = fixed_threshold
-
-        if threshold is None:
-            LOGGER.warning(f"Could not compute threshold for {test_case}")
 
         # Extract basic system info from benchmark definitions.
         sequence_dataframe = system_info[system_info.name == test_case]
         free_energy_results[test_case] = sequence_dataframe.to_dict(orient="records")[0]
 
-        # Store threshold.
-        free_energy_results[test_case]["threshold"] = threshold
         # Store temperature.
         free_energy_results[test_case]["temperature"] = temperature
 
@@ -145,17 +143,18 @@ def compute_dg_ddg_from_fnc(
         num_samples = len(fnc)
         if num_samples < 0.7 * num_samples_target:
             LOGGER.warning(
-                f"Number of samples for {test_case} below recommendation "
-                f"({num_samples}/{num_samples_target})."
+                "Number of samples for %s below recommendation (%s/%s).",
+                test_case,
+                num_samples,
+                num_samples_target,
             )
         free_energy_results[test_case]["num_samples"] = num_samples
 
         # Compute dG and store.
-        if threshold is not None:
-            dg_pred = _compute_dG(fnc, threshold, temperature=temperature)
-            free_energy_results[test_case]["dg_pred"] = dg_pred
-        else:
-            free_energy_results[test_case]["dg_pred"] = None
+        dg_pred = _compute_dG(
+            fnc, temperature=temperature, p_fold_thr=p_fold_thr, steepness=steepness
+        )
+        free_energy_results[test_case]["dg_pred"] = dg_pred
 
     # Compute ddGs from dGs.
     for test_case in free_energy_results:
@@ -166,11 +165,14 @@ def compute_dg_ddg_from_fnc(
             continue
 
         if test_case_wt not in free_energy_results:
-            LOGGER.warning(f"Could not find wild type results for {test_case_wt} for ddG")
+            LOGGER.warning(
+                "Could not find wild type results for %s for ddG", test_case_wt
+            )
             continue
 
         free_energy_results[test_case]["ddg_pred"] = (
-            free_energy_results[test_case]["dg_pred"] - free_energy_results[test_case_wt]["dg_pred"]
+            free_energy_results[test_case]["dg_pred"]
+            - free_energy_results[test_case_wt]["dg_pred"]
         )
 
     return pd.DataFrame(free_energy_results).T

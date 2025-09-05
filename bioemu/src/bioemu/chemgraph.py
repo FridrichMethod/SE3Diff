@@ -17,6 +17,8 @@ class ChemGraph(Data):
     edge_index: torch.Tensor  # [2, num_edges]
     single_embeds: torch.Tensor  # [num_nodes, EVOFORMER_NODE_DIM]
     pair_embeds: torch.Tensor  # [num_nodes**2, EVOFORMER_EDGE_DIM]
+    sequence: str  # amino acid sequence of the protein
+    system_id: str  # optional identifier for the protein sequence, e.g. a PDB ID.
 
     def replace(self, **kwargs: Any) -> Self:
         """Returns a shallow copy of the ChemGraph with updated fields."""

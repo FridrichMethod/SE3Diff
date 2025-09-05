@@ -32,7 +32,7 @@ from bioemu.sample import (
     DEFAULT_MODEL_CHECKPOINT_DIR,
     SupportedModelNamesLiteral,
     batch_to_dense_dict,
-    generate_chemgraph,
+    get_context_chemgraph,
     maybe_download_checkpoint,
 )
 from bioemu.seq_io import check_protein_valid
@@ -138,7 +138,7 @@ def init_finetune_model(model: DiGConditionalScoreModel, scale: float = 1.0) -> 
 
 
 def load_finetune_bundle(
-    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.0",
+    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.1",
     ckpt_path: str | Path | None = None,
     finetune_ckpt_path: str | Path | None = None,
     model_config_path: str | Path | None = None,
@@ -333,7 +333,7 @@ def generate_finetune_batch(
     if seed is not None:
         torch.manual_seed(seed)
 
-    chemgraph = generate_chemgraph(
+    chemgraph = get_context_chemgraph(
         sequence=sequence,
         cache_embeds_dir=cache_embeds_dir,
         msa_file=msa_file,
@@ -701,7 +701,7 @@ def main(
     h_stars_cols: list[str],
     output_dir: str | Path | None = None,
     finetune_config_path: str | Path | None = None,
-    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.0",
+    model_name: SupportedModelNamesLiteral | None = "bioemu-v1.1",
     ckpt_path: str | Path | None = None,
     finetune_ckpt_path: str | Path | None = None,
     model_config_path: str | Path | None = None,
