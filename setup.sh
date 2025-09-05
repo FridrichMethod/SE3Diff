@@ -24,6 +24,8 @@ pip install uv
 # Install required packages with correct versions
 uv pip install -e .
 uv pip install dm-haiku --upgrade
+uv pip install numpy --upgrade
+uv pip install pandas --upgrade
 
 # Patch ColabFold
 SITE_PACKAGES_DIR=$(python -c "import site; print(next(p for p in site.getsitepackages() if 'site-packages' in p))")
