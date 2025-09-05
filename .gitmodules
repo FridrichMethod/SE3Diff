@@ -1,0 +1,8 @@
+[submodule "bioemu"]
+	path = bioemu
+	url = https://github.com/FridrichMethod/bioemu.git
+	branch = dev
+[submodule "bioemu-benchmarks"]
+	path = bioemu-benchmarks
+	url = https://github.com/FridrichMethod/bioemu-benchmarks.git
+	branch = dev
